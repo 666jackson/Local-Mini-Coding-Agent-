@@ -247,6 +247,16 @@ def test_truncated_reply_is_not_done(tb: Toolbox) -> None:
     assert "cut off" in llm.calls[1][-1]["content"]
 
 
+def test_swallowed_output_suggests_write_block(tb: Toolbox) -> None:
+    """實際觀察到：qwen3 生成 ~275 tokens，Ollama 卻回傳空內容、沒有 tool_calls。"""
+    lost = LLMResponse(content="", usage={"completion_tokens": 275, "swallowed": 1})
+    block = say(f'<write_file path="mod.py">\n{FIXED}</write_file>')
+    llm = ScriptedLLM([lost, block, tool("run_command", {"command": "python -m pytest -q"}), say("done")])
+    res = run("x", llm, tb)
+    assert res.status == "done" and res.verified and res.malformed_calls == 1
+    assert "<write_file" in llm.calls[1][-1]["content"]
+
+
 def test_empty_reply_nudged(tb: Toolbox) -> None:
     llm = ScriptedLLM([say(""), say("沒有需要修改的地方")])
     res = run("x", llm, tb, require_passing_tests=False)

@@ -62,7 +62,8 @@ def run_one(task: dict[str, Any], model: str, cfg: Config, out_dir: Path, max_st
         audit = AuditLog(out_dir / "audit.jsonl")
         # 評測是非互動的：confirm 級一律拒絕，只有白名單指令能跑
         tb = Toolbox(ws, CommandPolicy(ws), cmd_timeout=cfg.cmd_timeout, audit=audit, protected_globs=DEFAULT_PROTECTED)
-        llm = OpenAICompatLLM(cfg.base_url, cfg.api_key, model, reasoning_effort=cfg.reasoning_effort)
+        name, _, effort = model.partition("@")  # 例如 qwen3-16k@none 關閉思考
+        llm = OpenAICompatLLM(cfg.base_url, cfg.api_key, name, reasoning_effort=effort or cfg.reasoning_effort)
         res = run(task["instruction"], llm, tb, max_steps=max_steps)
         passed, tampered = accept(work, task["accept"], original)
     events = audit.events
@@ -104,7 +105,7 @@ def summarize(rows: list[dict[str, Any]]) -> str:
 def main() -> int:
     cfg = Config.from_env()
     p = argparse.ArgumentParser()
-    p.add_argument("--models", nargs="+", default=[cfg.model])
+    p.add_argument("--models", nargs="+", default=[cfg.model], help="可用 模型@reasoning_effort，例如 qwen3-16k@none")
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--tasks", nargs="*", help="只跑這些任務 id")
     p.add_argument("--max-steps", type=int, default=cfg.max_steps)
@@ -120,18 +121,18 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for model in args.models:
         for other in args.models:  # 確保 GPU 上同時只有一個模型
-            unload_model(other)
+            unload_model(other.partition("@")[0])
         for task in tasks:
             for i in range(args.repeats):
                 used = check_gpu_budget(args.gpu_limit_mb)
-                run_dir = raw_dir / model.replace(":", "_") / f"{task['id']}-{i + 1}"
+                run_dir = raw_dir / model.replace(":", "_").replace("@", "_") / f"{task['id']}-{i + 1}"
                 row = run_one(task, model, cfg, run_dir, args.max_steps)
                 row["gpu_mb_before"] = used
                 rows.append(row)
                 print(f"[{model}] {task['id']} #{i + 1}: {'PASS' if row['passed'] else 'FAIL'} "
                       f"status={row['status']} steps={row['steps']} {row['elapsed_s']}s "
                       f"denied={row['denied_cmds']}", flush=True)
-        unload_model(model)
+        unload_model(model.partition("@")[0])
 
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"results-{stamp}.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2))

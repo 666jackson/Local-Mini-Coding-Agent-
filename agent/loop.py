@@ -44,6 +44,14 @@ UNTESTED_NUDGE = (
     "Do not describe the fix in text: apply it. Call write_file with the COMPLETE corrected source file, "
     "then call run_command with command \"python -m pytest -q\"."
 )
+SWALLOWED_NUDGE = (
+    "Your last tool call could not be parsed by the server (probably invalid JSON inside a long "
+    "file content), so nothing was executed. To write a file, reply with this plain-text block "
+    "instead of a tool call, and nothing else:\n"
+    '<write_file path="relative/path.py">\n'
+    "...the complete new file content, written normally...\n"
+    "</write_file>"
+)
 TRUNCATED_NUDGE = (
     "Your reply was cut off because it was too long, so nothing was executed. "
     "Think briefly and make ONE tool call."
@@ -258,6 +266,14 @@ def run(
             messages.append({"role": "user", "content": MALFORMED_NUDGE})
             audit.record("malformed_call", step=step, content=(resp.content or "")[:300])
             emit("nudge", {"step": step, "text": MALFORMED_NUDGE})
+            continue
+
+        # ----- 有生成內容但被伺服器的解析器吞掉：改用免 JSON 的寫檔格式 -----
+        if not calls and resp.usage.get("swallowed") and res.malformed_calls < MAX_MALFORMED_NUDGES:
+            res.malformed_calls += 1
+            messages.append({"role": "user", "content": SWALLOWED_NUDGE})
+            audit.record("malformed_call", step=step, kind="swallowed", tokens=resp.usage.get("completion_tokens"))
+            emit("nudge", {"step": step, "text": SWALLOWED_NUDGE})
             continue
 
         # ----- 回覆被截斷（輸出上限）：不是真的想結束 -----

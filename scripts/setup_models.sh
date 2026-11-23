@@ -4,7 +4,7 @@
 # 而 OpenAI 相容的 /v1 端點不接受 num_ctx。固定 16K 後每個 7–8B 模型約 6–8 GB。
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for pair in "qwen2.5-coder:7b qwen2.5-coder-16k" "llama3.1:8b llama3.1-16k" "qwen3:8b qwen3-16k"; do
+for pair in "qwen2.5-coder:7b qwen2.5-coder-16k" "llama3.1:8b llama3.1-16k" "qwen3:8b qwen3-16k" "gemma4:latest gemma4-16k"; do
   set -- $pair
   ollama pull "$1"
   ollama create "$2" -f "ollama/$2.Modelfile"

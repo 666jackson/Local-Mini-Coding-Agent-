@@ -98,6 +98,9 @@ class OpenAICompatLLM:
             usage = {"prompt_tokens": resp.usage.prompt_tokens, "completion_tokens": resp.usage.completion_tokens}
         if choice.finish_reason == "length":
             usage["truncated"] = 1
+        if not calls and not (msg.content or "").strip() and (usage.get("completion_tokens") or 0) > 20:
+            # 模型生成了內容，但 Ollama 的工具呼叫解析器把格式壞掉的呼叫整個吞掉了
+            usage["swallowed"] = 1
         return LLMResponse(content=msg.content, tool_calls=calls, usage=usage)
 
 
