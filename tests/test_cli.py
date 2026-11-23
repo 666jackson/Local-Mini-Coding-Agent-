@@ -62,7 +62,9 @@ def test_show_demo_flags_regression_even_when_other_rows_are_fixed(monkeypatch):
     """原本正確、修改後變錯的例子要被點名，不能因為其他例子修好就算過。"""
     before = "a => 20.0 => 14.0\nb => 12.0 => 12.0"
     after = "a => 14.0 => 14.0\nb => 6.0 => 12.0"
-    out = _capture(monkeypatch, cli.show_demo, before, after)
+    out = _capture(monkeypatch, cli.show_demo, before, after, True)
+    assert "測試雖然通過" in out
+    assert "測試雖然通過" not in _capture(monkeypatch, cli.show_demo, before, after, False)
     assert "正確答案" in out and "✗ 6.0" in out and "✓ 14.0" in out
     assert "還有 1 個例子不正確" in out and "1 個是原本正確、被這次修改改壞的" in out
 

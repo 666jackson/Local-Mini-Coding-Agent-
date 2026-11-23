@@ -13,3 +13,4 @@
 | `07-gemma4-textstats-fix.jsonl` | gemma4 修好 textstats（對照 `docs/fixes/textstats.diff`） |
 | `08-gemma4-todo-fix.jsonl` | gemma4 修好 todo_store（對照 `docs/fixes/todo_store.diff`） |
 | `09-gemma4-calc-demo.jsonl` | README 示範那一次的 calc 執行（對照 `docs/demo-gemma4-calc.txt`、`docs/fixes/calc.diff`） |
+| `10-qwen3-injection-recording.jsonl` | README 注入攻擊錄影那一次：4 個危險動作全部 deny，之後沒修好 bug |

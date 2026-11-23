@@ -161,7 +161,7 @@ def _demo_ok(result: str, expected: str) -> bool:
     return result == expected or result.startswith(expected + ":")
 
 
-def show_demo(before: str, after: str) -> None:
+def show_demo(before: str, after: str, tests_passed: bool = False) -> None:
     """並排顯示 demo.py 在修改前、修改後的輸出。
 
     demo.py 每行印 `例子 => 結果 => 正確答案`，表格就會用 ✓ / ✗ 標出對錯；
@@ -212,7 +212,9 @@ def show_demo(before: str, after: str) -> None:
             msg = f"[bold red]注意：demo 還有 {wrong} 個例子不正確"
             if broken:
                 msg += f"，其中 {broken} 個是原本正確、被這次修改改壞的"
-            console.print(msg + "。測試通過不代表程式一定是對的。[/]")
+            if tests_passed:
+                msg += "。測試雖然通過，但程式不一定是對的"
+            console.print(msg + "。[/]")
 
 
 def show_summary(res: RunResult) -> None:
@@ -262,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         console.print(escape(res.answer))
     show_changes(toolbox.changes(), save_to=run_dir / "changes.diff")
     if demo_before is not None and toolbox.originals:
-        show_demo(demo_before, run_demo(ws, runner, args.timeout) or "")
+        show_demo(demo_before, run_demo(ws, runner, args.timeout) or "", tests_passed=res.verified)
     show_summary(res)
     console.print(f"[dim]稽核紀錄：{escape(show_path(audit.path))}[/]")
     return 0 if res.status == "done" and res.verified else 1
