@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
-runs/
+/runs/
 evals/results/raw/
 *.egg-info/
 .DS_Store
