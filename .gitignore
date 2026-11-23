@@ -7,3 +7,4 @@ runs/
 evals/results/raw/
 *.egg-info/
 .DS_Store
+!demo_projects/textstats/.env

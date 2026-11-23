@@ -90,6 +90,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
+# 小模型常用錯的參數名稱 → 正確名稱（實際觀察：llama3.1:8b 用 filename 取代 path）
+ARG_ALIASES: dict[str, str] = {
+    "filename": "path", "file": "path", "file_path": "path", "filepath": "path", "file_name": "path",
+    "cmd": "command", "query": "pattern", "regex": "pattern", "text": "content", "code": "content",
+    "file_pattern": "glob", "start": "start_line", "end": "end_line",
+}
+
 REQUIRED_ARGS: dict[str, list[str]] = {
     s["function"]["name"]: s["function"]["parameters"]["required"] for s in TOOL_SCHEMAS
 }
@@ -210,7 +217,9 @@ class Toolbox:
         """解析參數並呼叫工具；任何錯誤都轉成 ERROR 字串。"""
         timer = Timer()
         args: dict[str, Any] = {}
+        self._aliased: list[str] = []
         try:
+            args = arguments if isinstance(arguments, dict) else {"_raw": arguments}
             args = self._parse_args(name, arguments)
             result = getattr(self, f"_tool_{name}")(**args)
         except _ToolError as e:
@@ -229,6 +238,7 @@ class Toolbox:
             reason=result.reason,
             ok=result.ok,
             result=result.content[:200],
+            aliased=self._aliased or None,
             ms=timer.ms(),
         )
         return result
@@ -245,11 +255,20 @@ class Toolbox:
                 raise _ToolError(f"arguments 不是合法 JSON（{e.msg}），請依 schema 重新呼叫") from None
         if not isinstance(args, dict):
             raise _ToolError("arguments 必須是 JSON 物件，請依 schema 重新呼叫")
-        missing = [k for k in REQUIRED_ARGS[name] if k not in args]
-        if missing:
-            raise _ToolError(f"{name} 缺少必填參數：{', '.join(missing)}")
         allowed = set(_schema_props(name))
-        return {k: v for k, v in args.items() if k in allowed}
+        fixed: dict[str, Any] = {}
+        for k, v in args.items():
+            if k not in allowed and ARG_ALIASES.get(k) in allowed and ARG_ALIASES[k] not in args:
+                self._aliased.append(f"{k}->{ARG_ALIASES[k]}")
+                k = ARG_ALIASES[k]
+            fixed[k] = v
+        missing = [k for k in REQUIRED_ARGS[name] if k not in fixed]
+        if missing:
+            got = ", ".join(fixed) or "（沒有參數）"
+            raise _ToolError(
+                f"{name} 缺少必填參數：{', '.join(missing)}。你傳了：{got}；正確的參數名稱是：{', '.join(allowed)}"
+            )
+        return {k: v for k, v in fixed.items() if k in allowed}
 
     # ---------- tools ----------
 
@@ -386,14 +405,26 @@ def _maybe_unescape(content: str) -> tuple[str, bool]:
 
     只在「幾乎沒有真正換行、卻有很多字面 \\n」且還原後是合法 Python 時才還原。
     """
-    if content.count("\n") > 2 or content.count("\\n") < 3:
-        return content, False
     try:
-        decoded = json.loads(f'"{content.strip()}"')
-        compile(decoded, "<check>", "exec")
-    except (json.JSONDecodeError, SyntaxError, ValueError):
-        return content, False
-    return decoded if decoded.endswith("\n") else decoded + "\n", True
+        compile(content, "<check>", "exec")
+        return content, False  # 本來就合法，不動
+    except (SyntaxError, ValueError):
+        pass
+    candidates: list[str] = []
+    if content.count("\\n") > content.count("\n"):
+        try:  # strict=False：容許字串中混有真正的換行
+            candidates.append(json.JSONDecoder(strict=False).decode(f'"{content.strip()}"'))
+        except json.JSONDecodeError:
+            pass
+    if '\\"' in content:
+        candidates.append(content.replace('\\"', '"'))  # 只有引號被跳脫、換行是真的
+    for cand in candidates:
+        try:
+            compile(cand, "<check>", "exec")
+        except (SyntaxError, ValueError):
+            continue
+        return (cand if cand.endswith("\n") else cand + "\n"), True
+    return content, False
 
 
 class _ToolError(Exception):

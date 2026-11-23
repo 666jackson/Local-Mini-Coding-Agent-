@@ -108,6 +108,28 @@ def test_write_fixes_double_escaped_python(tb: Toolbox, ws: Workspace) -> None:
     assert (ws.root / "pkg/mod.py").read_text() == '"""Doc."""\n\ndef add(a, b):\n    return a + b\n'
 
 
+def test_write_fixes_mixed_escaping(tb: Toolbox, ws: Workspace) -> None:
+    """實際觀察到：第一個換行是真的，其餘是字面 \\n，引號也被跳脫。"""
+    content = '\\"\\"\\"Doc.\\"\\"\\"\n\\n\\ndef add(a, b):\\n    return a + b\\n'
+    out = call(tb, "write_file", path="pkg/mod.py", content=content)
+    assert "雙重跳脫" in out
+    assert (ws.root / "pkg/mod.py").read_text() == '"""Doc."""\n\n\ndef add(a, b):\n    return a + b\n'
+
+
+def test_write_fixes_escaped_quotes_only(tb: Toolbox, ws: Workspace) -> None:
+    """實際觀察到：換行是真的，但引號全被跳脫成 \\"。"""
+    content = '\\"\\"\\"Doc.\\"\\"\\"\n\ndef greet():\n    return \\"hi\\"\n'
+    out = call(tb, "write_file", path="pkg/mod.py", content=content)
+    assert "雙重跳脫" in out
+    assert (ws.root / "pkg/mod.py").read_text() == '"""Doc."""\n\ndef greet():\n    return "hi"\n'
+
+
+def test_valid_python_with_escapes_untouched(tb: Toolbox, ws: Workspace) -> None:
+    content = 'S = "a\\nb \\"q\\""\n'
+    call(tb, "write_file", path="pkg/s.py", content=content)
+    assert (ws.root / "pkg/s.py").read_text() == content
+
+
 def test_protected_test_files(ws: Workspace) -> None:
     tb = Toolbox(ws, protected_globs=DEFAULT_PROTECTED)
     for path in ["test_mod.py", "tests/test_new.py", "pkg/conftest.py"]:
@@ -205,6 +227,20 @@ def test_dispatch_bad_json_unknown_missing(tb: Toolbox) -> None:
     assert "未知工具" in out and "read_file" in out
     assert "缺少必填參數：path" in tb.dispatch("read_file", "{}").content
     assert "JSON 物件" in tb.dispatch("read_file", "[1, 2]").content
+
+
+def test_arg_aliases(tb: Toolbox) -> None:
+    """實際觀察到：llama3.1:8b 用 {"filename": ...} 呼叫 read_file。"""
+    r = tb.dispatch("read_file", '{"filename": "pkg/mod.py"}')
+    assert r.ok and "def add" in r.content
+    assert tb.audit.events[-1]["aliased"] == ["filename->path"]
+    assert tb.dispatch("run_command", {"cmd": "ls"}).ok
+
+
+def test_missing_arg_message_lists_what_was_sent(tb: Toolbox) -> None:
+    out = tb.dispatch("read_file", '{"name": "pkg/mod.py"}').content
+    assert "缺少必填參數：path" in out and "你傳了：name" in out and "正確的參數名稱" in out
+    assert tb.audit.events[-1]["args"] == {"_raw": '{"name": "pkg/mod.py"}'}
 
 
 def test_dispatch_ignores_extra_args_and_accepts_dict(tb: Toolbox) -> None:
