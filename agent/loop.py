@@ -41,7 +41,8 @@ VERIFY_NUDGE = (
 )
 UNTESTED_NUDGE = (
     "The tests have not passed in this session yet, so the task is not done. "
-    "Use the tools (call run_command with command \"python -m pytest -q\") instead of describing what to do."
+    "Do not describe the fix in text: apply it. Call write_file with the COMPLETE corrected source file, "
+    "then call run_command with command \"python -m pytest -q\"."
 )
 TRUNCATED_NUDGE = (
     "Your reply was cut off because it was too long, so nothing was executed. "
@@ -277,7 +278,8 @@ def run(
             if nudge and res.verify_nudges < MAX_VERIFY_NUDGES:
                 res.verify_nudges += 1
                 messages.append({"role": "user", "content": nudge})
-                audit.record("nudge", kind="verify" if nudge is VERIFY_NUDGE else "untested", step=step)
+                audit.record("nudge", kind="verify" if nudge is VERIFY_NUDGE else "untested", step=step,
+                             content=(resp.content or "")[:500])
                 emit("nudge", {"step": step, "text": nudge})
                 continue
             if not (resp.content or "").strip() and empty_nudges < MAX_EMPTY_NUDGES:
@@ -290,7 +292,8 @@ def run(
 
         # ----- 分派工具 -----
         for call in calls:
-            key = _call_key(call)
+            # 工作區版本：每次成功寫入就變。改檔後重跑測試是新的嘗試，不算重複。
+            key = f"v{len(toolbox.files_written)}:{_call_key(call)}"
             history.append(key)
             repeat = history[-REPEAT_WINDOW:].count(key)
             if repeat >= REPEAT_STOP_AT:

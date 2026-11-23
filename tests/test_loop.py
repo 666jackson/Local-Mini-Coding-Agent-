@@ -172,8 +172,20 @@ def test_alternating_cycle_detected(tb: Toolbox) -> None:
     r = tool("run_command", {"command": "python -m pytest -q"})
     llm = ScriptedLLM([w, r] * 10)
     res = run("x", llm, tb, max_steps=20)
-    assert res.status == "repeated" and res.steps == 9  # w r w r w r w r w(第 5 次)
+    # 第一次寫入有改檔（版本+1），之後的寫入都 NO CHANGE；pytest 在同一版本下第 5 次時停止
+    assert res.status == "repeated" and res.steps == 10
     assert "NO CHANGE" in last_tool_output(llm, 3)  # 第二次寫入同樣內容被告知沒變
+
+
+def test_rerunning_tests_after_new_writes_is_not_a_repeat(tb: Toolbox) -> None:
+    """實際觀察到：qwen3 第 2 次寫入就修好了，但第 5 次 pytest 被當成重複而停掉。"""
+    r = tool("run_command", {"command": "python -m pytest -q"})
+    steps = [r, r]
+    for i in range(3):
+        steps += [tool("write_file", {"path": "mod.py", "content": f"def add(a, b):\n    return a * b  # {i}\n"}), r]
+    steps += [tool("write_file", {"path": "mod.py", "content": FIXED}), r, say("done")]
+    res = run("x", ScriptedLLM(steps), tb, max_steps=30)
+    assert res.status == "done" and res.verified
 
 
 def test_max_steps(tb: Toolbox) -> None:
@@ -205,7 +217,7 @@ def test_untested_nudge_when_model_only_describes(tb: Toolbox) -> None:
     ])
     res = run("x", llm, tb)
     assert res.status == "done" and res.verified and res.verify_nudges == 1
-    assert "have not passed" in llm.calls[1][-1]["content"]
+    assert "have not passed" in llm.calls[1][-1]["content"] and "write_file" in llm.calls[1][-1]["content"]
     assert tb.audit.count("nudge", kind="untested") == 1
 
 
