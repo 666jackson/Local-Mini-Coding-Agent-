@@ -57,6 +57,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def show_path(path: Path) -> str:
+    """顯示用路徑：在目前目錄底下就印相對路徑，避免把個人的絕對路徑印在畫面或錄影裡。"""
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
+
+
 def ask_user(cmd: str) -> bool:
     """confirm 級指令：印出來請使用者輸入 y。"""
     console.print(f"[yellow]⚠ 模型想執行不在白名單的指令：[/]{escape(cmd)}")
@@ -95,12 +103,14 @@ def make_printer(quiet: bool):
             r = d["result"]
             tag = ""
             if r.decision:
-                tag = f"[{DECISION_STYLE[r.decision]}][{r.decision}][/] "
+                tag = f"[{DECISION_STYLE[r.decision]}]\\[{r.decision}][/] "  # 跳脫左括號，否則 rich 會把 [allow] 當成標記吃掉
             first = r.content.strip().splitlines()[0] if r.content.strip() else ""
             if r.name == "run_command" and r.content.startswith("exit_code"):
                 tail = [ln for ln in r.content.splitlines() if ln.strip() and not ln.startswith("---")]
                 first = f"{tail[0]} | {tail[-1][:160]}" if len(tail) > 1 else tail[0]
             style = "red" if r.content.startswith("ERROR") else "dim"
+            if r.name == "run_command" and r.content.startswith("exit_code"):
+                style = "green" if r.content.startswith("exit_code: 0") else "red"
             console.print(f"  {tag}[{style}]{escape(first[:200])}[/]")
         elif kind == "nudge":
             console.print(f"[yellow]✋ harness 提醒：{escape(d['text'])}[/]")
@@ -146,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     llm = OpenAICompatLLM(args.base_url, args.api_key, args.model, reasoning_effort=args.reasoning_effort)
 
     console.print(Panel(
-        f"任務：{escape(args.task)}\n工作區：{ws.root}\n模型：{args.model} @ {args.base_url}\n"
+        f"任務：{escape(args.task)}\n工作區：{escape(show_path(ws.root))}\n模型：{args.model} @ {args.base_url}\n"
         f"執行器：{'docker（--network none）' if args.docker else 'local'}  --yes：{args.yes}",
         title="mini-agent", border_style="blue",
     ))
@@ -154,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
               require_passing_tests=not args.no_require_tests)
     if res.answer and args.quiet:
         console.print(escape(res.answer))
-    console.print(f"[dim]稽核紀錄：{audit.path}[/]")
+    console.print(f"[dim]稽核紀錄：{escape(show_path(audit.path))}[/]")
     return 0 if res.status == "done" and res.verified else 1
 
 
