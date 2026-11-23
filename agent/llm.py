@@ -47,8 +47,9 @@ class OpenAICompatLLM:
         model: str,
         *,
         temperature: float = 0.0,
-        timeout: float = 300.0,
-        retries: int = 2,
+        timeout: float = 180.0,
+        retries: int = 1,
+        max_tokens: int = 4096,
     ) -> None:
         from openai import OpenAI  # 延遲 import：單元測試不需要 openai 連線
 
@@ -56,6 +57,7 @@ class OpenAICompatLLM:
         self.model = model
         self.temperature = temperature
         self.retries = retries
+        self.max_tokens = max_tokens  # 防止小模型陷入無止境的重複生成
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> LLMResponse:
         """送出一次 chat completion；連線類錯誤會退避重試。"""
@@ -69,6 +71,7 @@ class OpenAICompatLLM:
                     messages=messages,  # type: ignore[arg-type]
                     tools=tools,  # type: ignore[arg-type]
                     temperature=self.temperature,
+                    max_tokens=self.max_tokens,
                 )
                 break
             except (APIConnectionError, APITimeoutError, InternalServerError) as e:
@@ -77,7 +80,8 @@ class OpenAICompatLLM:
         else:
             raise LLMError(f"模型呼叫失敗（{type(last).__name__}）：{last}")
 
-        msg = resp.choices[0].message
+        choice = resp.choices[0]
+        msg = choice.message
         calls = [
             ToolCall(id=tc.id or f"call_{i}", name=tc.function.name, arguments=tc.function.arguments or "{}")
             for i, tc in enumerate(msg.tool_calls or [])
@@ -85,6 +89,8 @@ class OpenAICompatLLM:
         usage = {}
         if resp.usage:
             usage = {"prompt_tokens": resp.usage.prompt_tokens, "completion_tokens": resp.usage.completion_tokens}
+        if choice.finish_reason == "length":
+            usage["truncated"] = 1
         return LLMResponse(content=msg.content, tool_calls=calls, usage=usage)
 
 
