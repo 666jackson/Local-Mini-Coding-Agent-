@@ -9,7 +9,7 @@ import pytest
 
 from agent.audit import AuditLog
 from agent.safety import CommandPolicy, Workspace
-from agent.tools import MAX_OUTPUT_CHARS, DockerRunner, Toolbox, TOOL_SCHEMAS
+from agent.tools import DEFAULT_PROTECTED, MAX_OUTPUT_CHARS, DockerRunner, Toolbox, TOOL_SCHEMAS
 
 
 @pytest.fixture
@@ -79,6 +79,42 @@ def test_write_file_creates_and_diffs(tb: Toolbox, ws: Workspace) -> None:
     assert tb.needs_verification and tb.files_written == ["pkg/mod.py"]
     out = call(tb, "write_file", path="new/dir/x.py", content="a = 1\n")
     assert out.startswith("已建立 new/dir/x.py") and (ws.root / "new/dir/x.py").exists()
+
+
+def test_write_file_unchanged_is_reported(tb: Toolbox) -> None:
+    r = tb.dispatch("write_file", {"path": "pkg/mod.py", "content": "def add(a, b):\n    return a - b\n"})
+    assert not r.ok and r.content.startswith("NO CHANGE") and tb.files_written == []
+
+
+def test_command_output_keeps_more_tail(ws: Workspace) -> None:
+    (ws.root / "tb.py").write_text("print('noise ' * 2000)\nraise SystemExit('THE REAL ERROR')\n")
+    tb = Toolbox(ws, CommandPolicy(ws, auto_yes=True))
+    assert "THE REAL ERROR" in call(tb, "run_command", command="python tb.py")
+
+
+def test_write_rejects_python_syntax_error(tb: Toolbox, ws: Workspace) -> None:
+    before = (ws.root / "pkg/mod.py").read_text()
+    out = call(tb, "write_file", path="pkg/mod.py", content="def add(a, b)\n    return a + b\n")
+    assert "語法錯誤" in out and "第 1 行" in out and "未寫入" in out
+    assert (ws.root / "pkg/mod.py").read_text() == before and not tb.needs_verification
+    assert call(tb, "write_file", path="notes.txt", content="def broken(\n").startswith("已建立")
+
+
+def test_write_fixes_double_escaped_python(tb: Toolbox, ws: Workspace) -> None:
+    """實際觀察到：qwen2.5-coder 把整份檔案寫成一行跳脫字串。"""
+    escaped = '\\"\\"\\"Doc.\\"\\"\\"\\n\\ndef add(a, b):\\n    return a + b\\n'
+    out = call(tb, "write_file", path="pkg/mod.py", content=escaped)
+    assert "雙重跳脫" in out
+    assert (ws.root / "pkg/mod.py").read_text() == '"""Doc."""\n\ndef add(a, b):\n    return a + b\n'
+
+
+def test_protected_test_files(ws: Workspace) -> None:
+    tb = Toolbox(ws, protected_globs=DEFAULT_PROTECTED)
+    for path in ["test_mod.py", "tests/test_new.py", "pkg/conftest.py"]:
+        r = tb.dispatch("write_file", {"path": path, "content": "def test_x(): pass\n"})
+        assert not r.ok and "受保護" in r.content and r.decision == "deny", path
+    assert "test_add" in (ws.root / "test_mod.py").read_text()
+    assert tb.dispatch("write_file", {"path": "pkg/mod.py", "content": "x = 1\n"}).ok
 
 
 def test_write_file_limits(tb: Toolbox, ws: Workspace) -> None:

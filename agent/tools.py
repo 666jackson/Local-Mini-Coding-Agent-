@@ -23,6 +23,7 @@ MAX_OUTPUT_CHARS = 4000
 MAX_READ_LINES = 300
 MAX_SEARCH_RESULTS = 50
 SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache", ".mypy_cache"}
+DEFAULT_PROTECTED = ("test_*.py", "*_test.py", "tests/*", "conftest.py")
 TEST_CMD_RE = re.compile(r"(^|\s|/)(pytest|py\.test)(\s|$)")
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -190,8 +191,10 @@ class Toolbox:
         cmd_timeout: int = 30,
         runner: CommandRunner | None = None,
         audit: AuditLog | None = None,
+        protected_globs: tuple[str, ...] = (),
     ) -> None:
         self.ws = ws
+        self.protected_globs = protected_globs
         self.policy = policy or CommandPolicy(ws)
         self.cmd_timeout = cmd_timeout
         self.runner: CommandRunner = runner or LocalRunner()
@@ -278,15 +281,40 @@ class Toolbox:
         if not isinstance(content, str):
             raise _ToolError("content 必須是字串")
         p = self.ws.resolve(path)
+        rel = self.ws.display(p)
+        if any(fnmatch.fnmatch(rel, g) or fnmatch.fnmatch(p.name, g) for g in self.protected_globs):
+            return ToolResult(
+                "write_file",
+                f"ERROR: {rel} 是受保護的測試檔，不能修改或新增。請修改被測試的程式碼。",
+                ok=False, decision="deny", reason="protected test file",
+            )
+        notes: list[str] = []
+        if p.suffix == ".py":
+            content, unescaped = _maybe_unescape(content)
+            if unescaped:
+                notes.append("（偵測到雙重跳脫的內容，已自動還原成正常換行）")
+            try:
+                compile(content, rel, "exec")
+            except SyntaxError as e:
+                bad = (e.text or "").rstrip()
+                raise _ToolError(
+                    f"內容有 Python 語法錯誤，檔案未寫入（原檔保持不變）：第 {e.lineno} 行 {e.msg}: {bad!r}"
+                ) from None
         data = content.encode("utf-8")
         if len(data) > self.ws.max_write_bytes:
             raise _ToolError(f"內容 {len(data)} bytes 超過寫入上限 {self.ws.max_write_bytes}")
         if p.is_dir():
             raise _ToolError(f"{path} 是資料夾")
         old = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+        if p.exists() and old == content:
+            return ToolResult(
+                "write_file",
+                f"NO CHANGE: {self.ws.display(p)} already has exactly this content, nothing was written. "
+                "If tests still fail, read the error message and change your approach.",
+                ok=False,
+            )
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
-        rel = self.ws.display(p)
         self.files_written.append(rel)
         self.needs_verification = True
         self.tests_passed = False
@@ -296,7 +324,7 @@ class Toolbox:
         preview = "\n".join(d for d in diff[2:22] if not d.startswith("@@"))
         verb = "建立" if not old else "覆寫"
         summary = f"已{verb} {rel}：{len(content.splitlines())} 行（+{added} / -{removed}）"
-        return ToolResult("write_file", f"{summary}\n{preview}".rstrip(), ok=True)
+        return ToolResult("write_file", "\n".join([summary, *notes, preview]).rstrip(), ok=True)
 
     def _tool_run_command(self, command: str) -> ToolResult:
         decision, reason, ok = self.policy.decide(command)
@@ -311,8 +339,8 @@ class Toolbox:
         half = MAX_OUTPUT_CHARS // 2 - 100
         text = (
             f"exit_code: {out.exit_code}\n"
-            f"--- stdout ---\n{truncate_middle(out.stdout, half)}\n"
-            f"--- stderr ---\n{truncate_middle(out.stderr, half)}"
+            f"--- stdout ---\n{truncate_middle(out.stdout, half, head_ratio=0.25)}\n"
+            f"--- stderr ---\n{truncate_middle(out.stderr, half, head_ratio=0.25)}"
         )
         return ToolResult("run_command", text, ok=out.exit_code == 0, decision=decision, reason=reason)
 
@@ -351,6 +379,21 @@ class Toolbox:
                 if p.is_file() and p.stat().st_size <= self.ws.max_read_bytes:
                     out.append(p)
         return out
+
+
+def _maybe_unescape(content: str) -> tuple[str, bool]:
+    """小模型常把檔案內容 JSON 跳脫兩次（整份檔案變成一行、充滿字面 \\n）。
+
+    只在「幾乎沒有真正換行、卻有很多字面 \\n」且還原後是合法 Python 時才還原。
+    """
+    if content.count("\n") > 2 or content.count("\\n") < 3:
+        return content, False
+    try:
+        decoded = json.loads(f'"{content.strip()}"')
+        compile(decoded, "<check>", "exec")
+    except (json.JSONDecodeError, SyntaxError, ValueError):
+        return content, False
+    return decoded if decoded.endswith("\n") else decoded + "\n", True
 
 
 class _ToolError(Exception):

@@ -25,7 +25,7 @@ class Config:
 
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
-    model: str = "qwen2.5-coder:7b"
+    model: str = "qwen2.5-coder-16k"
     max_steps: int = 20
     cmd_timeout: int = 30
 

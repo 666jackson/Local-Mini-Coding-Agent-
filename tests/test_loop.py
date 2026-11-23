@@ -104,11 +104,36 @@ def test_fallback_parsing_from_text(tb: Toolbox) -> None:
         ('{"name": "read_file", "arguments": "{\\"path\\": \\"a\\"}"}', ["read_file"]),
         ('Example config: {"name": "my-app", "version": 1}', []),  # 不是工具，不能誤判
         ("no json here", []),
+        # 實際觀察到：qwen2.5-coder 用 Python 三引號包檔案內容
+        ('{"name": "write_file", "arguments": {"path": "a.py", "content": """x = \\"hi\\"\\nprint(x)"""}}',
+         ["write_file"]),
         (None, []),
     ],
 )
 def test_parse_fallback_variants(content: str | None, expected: list[str]) -> None:
     assert [c.name for c in parse_fallback_calls(content, KNOWN)] == expected
+
+
+def test_triple_quote_repair_content() -> None:
+    raw = '{"name": "write_file", "arguments": {"path": "a.py", "content": """x = 1\nif x:\n    print("ok")"""}}'
+    (call,) = parse_fallback_calls(raw, KNOWN)
+    assert json.loads(call.arguments)["content"] == 'x = 1\nif x:\n    print("ok")'
+
+
+def test_write_block_format() -> None:
+    raw = 'Here is the fix:\n<write_file path="calc.py">\ndef f():\n    """doc"""\n    return "a\\n"\n</write_file>'
+    (call,) = parse_fallback_calls(raw, KNOWN)
+    args = json.loads(call.arguments)
+    assert call.name == "write_file" and args["path"] == "calc.py"
+    assert args["content"] == 'def f():\n    """doc"""\n    return "a\\n"\n'
+
+
+def test_malformed_call_gets_nudge_not_done(tb: Toolbox) -> None:
+    broken = '{"name": "write_file", "arguments": {"path": "mod.py", "content": \'oops\'}}'
+    llm = ScriptedLLM([say(broken), tool("read_file", {"path": "mod.py"}), say("ok")])
+    res = run("x", llm, tb, require_passing_tests=False)
+    assert res.malformed_calls == 1 and res.tool_calls == 1 and res.status == "done"
+    assert "not valid JSON" in llm.calls[1][-1]["content"]
 
 
 def test_unknown_tool_lists_available(tb: Toolbox) -> None:
@@ -130,7 +155,7 @@ def test_repeat_warning_then_stop(tb: Toolbox) -> None:
     res = run("x", llm, tb, max_steps=20)
     assert res.status == "repeated" and res.steps == REPEAT_STOP_AT
     assert res.tool_calls == REPEAT_STOP_AT - 1  # 第 5 次不執行
-    assert "same arguments 3 times" in last_tool_output(llm, 3)
+    assert "same arguments 3 times recently" in last_tool_output(llm, 3)
     assert tb.audit.count("repeat_stop") == 1
 
 
@@ -139,6 +164,16 @@ def test_repeat_counter_resets_on_different_call(tb: Toolbox) -> None:
     b = tool("search", {"pattern": "add"})
     llm = ScriptedLLM([a, a, b, a, a, say("done")])
     assert run("x", llm, tb).status == "done"
+
+
+def test_alternating_cycle_detected(tb: Toolbox) -> None:
+    """實際觀察到的失敗模式：寫入同樣內容 → 跑測試 → 同樣錯誤，交替重複。"""
+    w = tool("write_file", {"path": "mod.py", "content": "def add(a, b):\n    return a * b\n"})
+    r = tool("run_command", {"command": "python -m pytest -q"})
+    llm = ScriptedLLM([w, r] * 10)
+    res = run("x", llm, tb, max_steps=20)
+    assert res.status == "repeated" and res.steps == 9  # w r w r w r w r w(第 5 次)
+    assert "NO CHANGE" in last_tool_output(llm, 3)  # 第二次寫入同樣內容被告知沒變
 
 
 def test_max_steps(tb: Toolbox) -> None:
@@ -157,6 +192,21 @@ def test_verify_nudge_when_finishing_without_tests(tb: Toolbox) -> None:
     res = run("x", llm, tb)
     assert res.status == "done" and res.verify_nudges == 1 and res.verified
     assert llm.calls[2][-1] == {"role": "user", "content": VERIFY_NUDGE}
+
+
+def test_untested_nudge_when_model_only_describes(tb: Toolbox) -> None:
+    """實際觀察到的失敗模式：模型把「run_command `python -m pytest -q`」當文字回覆。"""
+    llm = ScriptedLLM([
+        say("run_command `python -m pytest -q`"),
+        tool("run_command", {"command": "python -m pytest -q"}),
+        tool("write_file", {"path": "mod.py", "content": FIXED}),
+        tool("run_command", {"command": "python -m pytest -q"}),
+        say("done"),
+    ])
+    res = run("x", llm, tb)
+    assert res.status == "done" and res.verified and res.verify_nudges == 1
+    assert "have not passed" in llm.calls[1][-1]["content"]
+    assert tb.audit.count("nudge", kind="untested") == 1
 
 
 def test_verify_nudge_capped_at_two(tb: Toolbox) -> None:
@@ -178,7 +228,7 @@ def test_failed_tests_do_not_count_as_verified(tb: Toolbox) -> None:
 
 def test_empty_reply_nudged(tb: Toolbox) -> None:
     llm = ScriptedLLM([say(""), say("沒有需要修改的地方")])
-    res = run("x", llm, tb)
+    res = run("x", llm, tb, require_passing_tests=False)
     assert res.status == "done" and llm.calls[1][-1]["content"] == EMPTY_NUDGE
 
 
@@ -216,7 +266,7 @@ def test_multiple_calls_in_one_turn(tb: Toolbox) -> None:
 def test_events_emitted(tb: Toolbox) -> None:
     kinds: list[str] = []
     run("x", ScriptedLLM([tool("search", {"pattern": "add"}), say("ok")]), tb,
-        on_event=lambda k, _d: kinds.append(k))
+        on_event=lambda k, _d: kinds.append(k), require_passing_tests=False)
     assert kinds == ["assistant", "tool_call", "tool_result", "assistant", "end"]
 
 

@@ -185,11 +185,14 @@ def minimal_env() -> dict[str, str]:
     }
 
 
-def truncate_middle(text: str, limit: int = 4000) -> str:
-    """超過上限時保留頭尾、中間省略，避免塞爆 context。"""
+def truncate_middle(text: str, limit: int = 4000, head_ratio: float = 2 / 3) -> str:
+    """超過上限時保留頭尾、中間省略，避免塞爆 context。
+
+    指令輸出（錯誤訊息通常在最後）可用較小的 head_ratio 保留較多結尾。
+    """
     if len(text) <= limit:
         return text
-    head = limit * 2 // 3
+    head = int(limit * head_ratio)
     tail = limit - head
     omitted = len(text) - head - tail
     return f"{text[:head]}\n...（中間省略 {omitted} 字元）...\n{text[-tail:]}"
