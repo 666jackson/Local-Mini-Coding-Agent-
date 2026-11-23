@@ -50,6 +50,7 @@ class OpenAICompatLLM:
         timeout: float = 180.0,
         retries: int = 1,
         max_tokens: int = 4096,
+        reasoning_effort: str | None = None,
     ) -> None:
         from openai import OpenAI  # 延遲 import：單元測試不需要 openai 連線
 
@@ -58,11 +59,16 @@ class OpenAICompatLLM:
         self.temperature = temperature
         self.retries = retries
         self.max_tokens = max_tokens  # 防止小模型陷入無止境的重複生成
+        # 思考型模型（如 qwen3）可設 "none" 關閉思考，否則思考內容會吃光 max_tokens
+        self.reasoning_effort = reasoning_effort
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> LLMResponse:
         """送出一次 chat completion；連線類錯誤會退避重試。"""
         from openai import APIConnectionError, APITimeoutError, InternalServerError
 
+        extra: dict[str, Any] = {}
+        if self.reasoning_effort:
+            extra["reasoning_effort"] = self.reasoning_effort
         last: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
@@ -72,6 +78,7 @@ class OpenAICompatLLM:
                     tools=tools,  # type: ignore[arg-type]
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
+                    **extra,
                 )
                 break
             except (APIConnectionError, APITimeoutError, InternalServerError) as e:

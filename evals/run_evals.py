@@ -62,7 +62,7 @@ def run_one(task: dict[str, Any], model: str, cfg: Config, out_dir: Path, max_st
         audit = AuditLog(out_dir / "audit.jsonl")
         # 評測是非互動的：confirm 級一律拒絕，只有白名單指令能跑
         tb = Toolbox(ws, CommandPolicy(ws), cmd_timeout=cfg.cmd_timeout, audit=audit, protected_globs=DEFAULT_PROTECTED)
-        llm = OpenAICompatLLM(cfg.base_url, cfg.api_key, model)
+        llm = OpenAICompatLLM(cfg.base_url, cfg.api_key, model, reasoning_effort=cfg.reasoning_effort)
         res = run(task["instruction"], llm, tb, max_steps=max_steps)
         passed, tampered = accept(work, task["accept"], original)
     events = audit.events
@@ -108,7 +108,7 @@ def main() -> int:
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--tasks", nargs="*", help="只跑這些任務 id")
     p.add_argument("--max-steps", type=int, default=cfg.max_steps)
-    p.add_argument("--gpu-limit-mb", type=int, default=24000, help="每次執行前檢查，超過就中止")
+    p.add_argument("--gpu-limit-mb", type=int, default=12000, help="每次執行前檢查 GPU 總用量，超過就中止")
     p.add_argument("--out", type=Path, default=ROOT / "evals" / "results")
     args = p.parse_args()
 
@@ -119,6 +119,8 @@ def main() -> int:
     raw_dir = args.out / "raw" / stamp
     rows: list[dict[str, Any]] = []
     for model in args.models:
+        for other in args.models:  # 確保 GPU 上同時只有一個模型
+            unload_model(other)
         for task in tasks:
             for i in range(args.repeats):
                 used = check_gpu_budget(args.gpu_limit_mb)

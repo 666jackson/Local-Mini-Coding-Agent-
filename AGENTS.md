@@ -29,4 +29,4 @@ pytest -q                 # 不需要 Ollama；test_loop.py 用 ScriptedLLM
 4. 所有函式要有型別標註與簡短 docstring；註解與面向使用者的訊息用繁體中文，給模型看的 system prompt 用英文。
 5. 單元測試不可依賴網路、Ollama 或 Docker。
 6. 不要把金鑰、個資或任何內部資料寫進 repo。`demo_projects/textstats/.env` 是刻意放的假資料，用來測試 `.env` 封鎖。
-7. 共用 GPU：跑真模型時用 `-16k` 別名，評測預設 `--gpu-limit-mb 24000`。
+7. 共用 GPU：跑真模型時用 `-16k` 別名，評測預設 `--gpu-limit-mb 12000`。

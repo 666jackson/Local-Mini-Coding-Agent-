@@ -41,6 +41,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--workspace", "-w", required=True, type=Path, help="agent 唯一能操作的資料夾")
     p.add_argument("--model", default=cfg.model)
     p.add_argument("--base-url", default=cfg.base_url)
+    p.add_argument("--reasoning-effort", default=cfg.reasoning_effort,
+                   help="思考型模型用，例如 none（qwen3 建議關閉思考）")
     p.add_argument("--max-steps", type=int, default=cfg.max_steps)
     p.add_argument("--timeout", type=int, default=cfg.cmd_timeout, help="單一指令逾時秒數")
     p.add_argument("--yes", "-y", action="store_true", help="自動同意 confirm 級指令（deny 永遠不放行）")
@@ -141,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     runner = DockerRunner(args.docker_image) if args.docker else LocalRunner()
     protected = () if args.allow_test_edits else DEFAULT_PROTECTED
     toolbox = Toolbox(ws, policy, cmd_timeout=args.timeout, runner=runner, audit=audit, protected_globs=protected)
-    llm = OpenAICompatLLM(args.base_url, args.api_key, args.model)
+    llm = OpenAICompatLLM(args.base_url, args.api_key, args.model, reasoning_effort=args.reasoning_effort)
 
     console.print(Panel(
         f"任務：{escape(args.task)}\n工作區：{ws.root}\n模型：{args.model} @ {args.base_url}\n"

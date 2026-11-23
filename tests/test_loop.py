@@ -226,6 +226,15 @@ def test_failed_tests_do_not_count_as_verified(tb: Toolbox) -> None:
     assert res.verify_nudges == 2 and not res.verified
 
 
+def test_truncated_reply_is_not_done(tb: Toolbox) -> None:
+    """實際觀察到：qwen3 的思考內容吃光 max_tokens，回覆被截斷、沒有工具呼叫。"""
+    cut = LLMResponse(content="", usage={"truncated": 1})
+    llm = ScriptedLLM([cut, tool("read_file", {"path": "mod.py"}), say("ok")])
+    res = run("x", llm, tb, require_passing_tests=False)
+    assert res.status == "done" and res.tool_calls == 1
+    assert "cut off" in llm.calls[1][-1]["content"]
+
+
 def test_empty_reply_nudged(tb: Toolbox) -> None:
     llm = ScriptedLLM([say(""), say("沒有需要修改的地方")])
     res = run("x", llm, tb, require_passing_tests=False)

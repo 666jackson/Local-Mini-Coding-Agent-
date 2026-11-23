@@ -43,6 +43,10 @@ UNTESTED_NUDGE = (
     "The tests have not passed in this session yet, so the task is not done. "
     "Use the tools (call run_command with command \"python -m pytest -q\") instead of describing what to do."
 )
+TRUNCATED_NUDGE = (
+    "Your reply was cut off because it was too long, so nothing was executed. "
+    "Think briefly and make ONE tool call."
+)
 EMPTY_NUDGE = "Your reply was empty. Call a tool, or give your final summary if the task is complete."
 REPEAT_WARN = (
     "NOTE: you have called {name} with the same arguments {n} times recently. "
@@ -253,6 +257,14 @@ def run(
             messages.append({"role": "user", "content": MALFORMED_NUDGE})
             audit.record("malformed_call", step=step, content=(resp.content or "")[:300])
             emit("nudge", {"step": step, "text": MALFORMED_NUDGE})
+            continue
+
+        # ----- 回覆被截斷（輸出上限）：不是真的想結束 -----
+        if not calls and resp.usage.get("truncated") and empty_nudges < MAX_EMPTY_NUDGES:
+            empty_nudges += 1
+            messages.append({"role": "user", "content": TRUNCATED_NUDGE})
+            audit.record("nudge", kind="truncated", step=step)
+            emit("nudge", {"step": step, "text": TRUNCATED_NUDGE})
             continue
 
         # ----- 模型沒有呼叫工具：視為想結束 -----

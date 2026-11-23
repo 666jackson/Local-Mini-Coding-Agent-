@@ -28,6 +28,7 @@ class Config:
     model: str = "qwen2.5-coder-16k"
     max_steps: int = 20
     cmd_timeout: int = 30
+    reasoning_effort: str | None = None
 
     @classmethod
     def from_env(cls, dotenv: Path | None = None) -> "Config":
@@ -40,4 +41,5 @@ class Config:
             model=os.environ.get("AGENT_MODEL", d.model),
             max_steps=int(os.environ.get("AGENT_MAX_STEPS", d.max_steps)),
             cmd_timeout=int(os.environ.get("AGENT_CMD_TIMEOUT", d.cmd_timeout)),
+            reasoning_effort=os.environ.get("AGENT_REASONING_EFFORT") or None,
         )
