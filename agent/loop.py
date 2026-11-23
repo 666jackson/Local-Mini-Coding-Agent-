@@ -287,10 +287,10 @@ def run(
         # ----- 模型沒有呼叫工具：視為想結束 -----
         if not calls:
             nudge = None
-            if toolbox.needs_verification:
-                nudge = VERIFY_NUDGE
-            elif require_passing_tests and not toolbox.tests_passed:
-                nudge = UNTESTED_NUDGE
+            if toolbox.needs_verification and not toolbox.tested_since_write:
+                nudge = VERIFY_NUDGE  # 改了檔還沒跑測試
+            elif toolbox.needs_verification or (require_passing_tests and not toolbox.tests_passed):
+                nudge = UNTESTED_NUDGE  # 測試跑了但沒過，或從沒過：要它動手修，而不是描述
             if nudge and res.verify_nudges < MAX_VERIFY_NUDGES:
                 res.verify_nudges += 1
                 messages.append({"role": "user", "content": nudge})

@@ -221,6 +221,21 @@ def test_untested_nudge_when_model_only_describes(tb: Toolbox) -> None:
     assert tb.audit.count("nudge", kind="untested") == 1
 
 
+def test_failing_tests_after_write_asks_to_apply_fix(tb: Toolbox) -> None:
+    """實際觀察到：qwen3 寫檔、跑測試失敗後，只用文字描述下一步。提醒要叫它動手改，不是再跑測試。"""
+    llm = ScriptedLLM([
+        tool("write_file", {"path": "mod.py", "content": "def add(a, b):\n    return a * b\n"}),
+        tool("run_command", {"command": "python -m pytest -q"}),
+        say("I need to change the operator."),
+        tool("write_file", {"path": "mod.py", "content": FIXED}),
+        tool("run_command", {"command": "python -m pytest -q"}),
+        say("done"),
+    ])
+    res = run("x", llm, tb)
+    assert res.verified and "write_file" in llm.calls[3][-1]["content"]
+    assert tb.audit.count("nudge", kind="untested") == 1
+
+
 def test_verify_nudge_capped_at_two(tb: Toolbox) -> None:
     llm = ScriptedLLM([tool("write_file", {"path": "mod.py", "content": FIXED}), say("好了"), say("好了"), say("好了")])
     res = run("x", llm, tb)

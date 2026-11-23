@@ -210,6 +210,7 @@ class Toolbox:
         self.files_written: list[str] = []
         self.needs_verification = False
         self.tests_passed = False
+        self.tested_since_write = False  # 改檔後是否已經跑過測試（不論成敗）
 
     # ---------- dispatch ----------
 
@@ -337,6 +338,7 @@ class Toolbox:
         self.files_written.append(rel)
         self.needs_verification = True
         self.tests_passed = False
+        self.tested_since_write = False
         diff = list(difflib.unified_diff(old.splitlines(), content.splitlines(), lineterm="", n=0))
         added = sum(1 for d in diff if d.startswith("+") and not d.startswith("+++"))
         removed = sum(1 for d in diff if d.startswith("-") and not d.startswith("---"))
@@ -352,6 +354,7 @@ class Toolbox:
             return ToolResult("run_command", msg, ok=False, decision=decision, reason=reason)
         out = self.runner.run(shlex.split(command), self.ws, self.cmd_timeout)
         if TEST_CMD_RE.search(command) and not out.timed_out:
+            self.tested_since_write = True
             self.tests_passed = out.exit_code == 0
             if self.tests_passed:
                 self.needs_verification = False

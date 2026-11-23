@@ -8,3 +8,4 @@ evals/results/raw/
 *.egg-info/
 .DS_Store
 !demo_projects/textstats/.env
+evals/last_run.log
