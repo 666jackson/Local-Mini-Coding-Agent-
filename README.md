@@ -84,6 +84,115 @@ $ python cli.py -w demo_projects/calc --copy --model gemma4-16k "讓所有測試
 
 全程在一張顯示卡上跑，顯示記憶體用量約 10.6 GB。
 
+### 模型到底改了什麼？三個專案的修改前後對照
+
+下面是 gemma4 實際寫進檔案的程式碼，一字未改。紅色 `-` 是原本有 bug 的程式，綠色 `+` 是模型改成的樣子。完整的修改檔在 [`docs/fixes/`](docs/fixes/)。
+
+| 專案 | 埋的 bug | 修改前 | 修改後 | 花費 |
+|---|---|---|---|---|
+| 🧮 計算機 calc | 不會先乘除後加減、除以零當掉 | 3 個測試失敗 | 8 個全過 ✅ | 5 步 / 26 秒 |
+| 📝 文字統計 textstats | 大小寫和標點沒處理、空字串當掉 | 4 個測試失敗 | 7 個全過 ✅ | 6 步 / 31 秒 |
+| ✅ 待辦清單 todo_store | 存檔再讀回來日期變成文字、刪除不存在的項目沒報錯 | 3 個測試失敗 | 5 個全過 ✅ | 5 步 / 24 秒 |
+
+#### 🧮 計算機：除以零
+
+原本 `1 / 0` 會直接讓程式當掉（Python 內建的錯誤），測試要求改成拋出計算機自己的 `CalcError`：
+
+```diff
+     if op == "/":
++        if b == 0.0:
++            raise CalcError("division by zero")
+         return a / b
+```
+
+#### 🧮 計算機：先乘除、後加減
+
+原本的程式從左算到右，所以 `2 + 3 * 4` 會算成 `(2 + 3) * 4 = 20`，正確答案是 `14`。模型改成分兩輪：第一輪只算 `*` 和 `/`，第二輪再從左到右算 `+` 和 `-`。
+
+```diff
++    # Pass 1: Multiplication and Division
++    while True:
++        new_tokens = []
++        i = 0
++        changed = False
++        while i < len(tokens):
++            if i + 2 < len(tokens) and tokens[i+1] in ('*', '/'):
++                op = tokens[i+1]
++                a = tokens[i]
++                b = tokens[i+2]
++                result = apply(op, a, b)     # 先把 3 * 4 算成 12
++                new_tokens.append(result)
++                i += 3
++                changed = True
++                continue
++            new_tokens.append(tokens[i])
++            i += 1
++        tokens = new_tokens
++        if not changed:
++            break
++
++    # Pass 2: Addition and Subtraction (Left to Right)
+     result = tokens[0]
+     for i in range(1, len(tokens), 2):
+```
+
+（這段為了好讀，省略了模型寫的一個 `try/except` 外框，中文註解是我加的；原樣請看 [`docs/fixes/calc.diff`](docs/fixes/calc.diff)。）
+
+> **老實說：** 測試全過，但程式碼不算漂亮。模型在這段前面還多寫了一段「Stage 1」，算完的結果根本沒被用到，等於是留下來的草稿。**測試通過不代表程式碼品質好**，真正上線前還是需要人來 review。
+
+#### 📝 文字統計：大小寫與標點
+
+原本用空白切字，所以 `"Hello, hello world!"` 會被切成 `Hello,`、`hello`、`world!` 三個不同的字。模型改成先轉小寫，再用正規表示式只抓英文字母和數字：
+
+```diff
+-    words = text.split(" ")
++    words = re.findall(r'\b\w+\b', text.lower())
+     return dict(Counter(words))
+```
+
+結果從 `{"Hello,": 1, "hello": 1, "world!": 1}` 變成正確的 `{"hello": 2, "world": 1}`。
+
+#### 📝 文字統計：空字串
+
+原本空字串會變成 `0 / 0`，程式當掉。模型加了一行檢查：
+
+```diff
+     words = text.split()
++    if not words:
++        return 0.0
+     return sum(len(w) for w in words) / len(words)
+```
+
+#### ✅ 待辦清單：刪除不存在的項目
+
+原本刪除不存在的項目時什麼事都不會發生，呼叫的人不知道自己刪錯了。模型改成找不到就明確報錯：
+
+```diff
+     def remove(self, todo_id: int) -> None:
+-        self.todos.pop(todo_id, None)
++        if todo_id not in self.todos:
++            raise TodoNotFound(f"Todo with id {todo_id} not found.")
++        del self.todos[todo_id]
+```
+
+#### ✅ 待辦清單：日期讀回來變成文字
+
+存檔時日期被轉成文字（例如 `"2024-05-01"`），但讀回來時沒有轉回日期，之後拿來比較「有沒有過期」就會出錯。模型在讀檔時把文字轉回日期：
+
+```diff
+     def load(self) -> None:
+         data = json.loads(self.path.read_text())
+-        self.todos = {d["id"]: Todo(**d) for d in data}
++        self.todos = {}
++        for d in data:
++            d_copy = d.copy()
++            if 'due' in d_copy and isinstance(d_copy['due'], str):
++                d_copy['due'] = date.fromisoformat(d_copy['due'])
++            self.todos[d_copy["id"]] = Todo(**d_copy)
+```
+
+**模型怎麼知道要改哪裡？** 它沒有看過答案，只看了兩樣東西：測試失敗時印出的錯誤訊息，以及原本的程式碼。每一步它讀了什麼、寫了什麼，都記錄在 [`docs/runs/`](docs/runs/) 的操作紀錄裡（計算機是 `09`，文字統計是 `07`，待辦清單是 `08`）。
+
 ---
 
 ## 3. 為什麼要做這個？

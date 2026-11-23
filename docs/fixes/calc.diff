@@ -1,0 +1,90 @@
+--- 修改前 calc/calc.py
++++ gemma4 修改後 calc/calc.py
+@@ -7,6 +7,7 @@
+ 
+ class CalcError(Exception):
+     """Raised for invalid expressions or math errors."""
++    pass
+ 
+ 
+ def tokenize(expr: str) -> list:
+@@ -33,6 +34,8 @@
+     if op == "*":
+         return a * b
+     if op == "/":
++        if b == 0.0:
++            raise CalcError("division by zero")
+         return a / b
+     raise CalcError(f"unknown operator {op!r}")
+ 
+@@ -44,7 +47,67 @@
+         raise CalcError("empty expression")
+     if len(tokens) % 2 == 0:
+         raise CalcError("incomplete expression")
++
++    # Stage 1: Handle * and / (Higher Precedence)
++    temp_tokens = []
++    i = 0
++    while i < len(tokens):
++        if isinstance(tokens[i], float) and i + 2 < len(tokens) and tokens[i+1] in ('*', '/'):
++            op = tokens[i+1]
++            a = tokens[i]
++            b = tokens[i+2]
++            result = apply(op, a, b)
++            temp_tokens.append(result)
++            i += 3
++        elif i < len(tokens):
++            temp_tokens.append(tokens[i])
++            i += 1
++    
++    # After Stage 1, temp_tokens might look like [num, op, num, op, num] 
++    # where ops are only + or - if the original expression was complex.
++    # We need to re-tokenize the result of stage 1 to handle remaining ops correctly.
++    
++    # A simpler approach for this limited set of operators:
++    # 1. Process * and / first, reducing the list.
++    # 2. Process + and - on the reduced list.
++
++    # Let's use a stack-based approach or iterative reduction for simplicity.
++    
++    # Pass 1: Multiplication and Division
++    while True:
++        new_tokens = []
++        i = 0
++        changed = False
++        while i < len(tokens):
++            if i + 2 < len(tokens) and tokens[i+1] in ('*', '/'):
++                op = tokens[i+1]
++                a = tokens[i]
++                b = tokens[i+2]
++                try:
++                    result = apply(op, a, b)
++                    new_tokens.append(result)
++                    i += 3
++                    changed = True
++                    continue
++                except CalcError:
++                    # If division by zero happens here, it will propagate up
++                    raise
++            
++            new_tokens.append(tokens[i])
++            i += 1
++        
++        tokens = new_tokens
++        if not changed:
++            break
++
++    # Pass 2: Addition and Subtraction (Left to Right)
++    if not tokens:
++        raise CalcError("empty expression")
++        
+     result = tokens[0]
+     for i in range(1, len(tokens), 2):
+-        result = apply(tokens[i], result, tokens[i + 1])
+-    return result
++        op = tokens[i]
++        b = tokens[i+1]
++        result = apply(op, result, b)
++        
++    return result
+\ No newline at end of file

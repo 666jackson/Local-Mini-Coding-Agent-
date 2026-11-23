@@ -1,0 +1,47 @@
+--- 修改前 todo_store/todo_store.py
++++ gemma4 修改後 todo_store/todo_store.py
+@@ -5,7 +5,6 @@
+ from datetime import date
+ from pathlib import Path
+ 
+-
+ @dataclass
+ class Todo:
+     id: int
+@@ -13,11 +12,9 @@
+     due: date
+     done: bool = False
+ 
+-
+ class TodoNotFound(KeyError):
+     """Raised when a todo id does not exist."""
+ 
+-
+ class TodoStore:
+     def __init__(self, path: Path):
+         self.path = Path(path)
+@@ -31,7 +28,9 @@
+ 
+     def remove(self, todo_id: int) -> None:
+         """Delete a todo; raise TodoNotFound if it does not exist."""
+-        self.todos.pop(todo_id, None)
++        if todo_id not in self.todos:
++            raise TodoNotFound(f"Todo with id {todo_id} not found.")
++        del self.todos[todo_id]
+ 
+     def save(self) -> None:
+         data = [asdict(t) | {"due": t.due.isoformat()} for t in self.todos.values()]
+@@ -39,7 +38,12 @@
+ 
+     def load(self) -> None:
+         data = json.loads(self.path.read_text())
+-        self.todos = {d["id"]: Todo(**d) for d in data}
++        self.todos = {}
++        for d in data:
++            d_copy = d.copy()
++            if 'due' in d_copy and isinstance(d_copy['due'], str):
++                d_copy['due'] = date.fromisoformat(d_copy['due'])
++            self.todos[d_copy["id"]] = Todo(**d_copy)
+ 
+     def overdue(self, today: date) -> list:
+         return [t for t in self.todos.values() if not t.done and t.due < today]

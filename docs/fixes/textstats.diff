@@ -1,0 +1,36 @@
+--- 修改前 textstats/textstats.py
++++ gemma4 修改後 textstats/textstats.py
+@@ -1,24 +1,23 @@
+ """Simple text statistics."""
+ 
+ from collections import Counter
+-
++import re
+ 
+ def word_count(text: str) -> dict:
+-    """Count words case-insensitively, ignoring punctuation.
+-
+-    word_count("Hello, hello world!") == {"hello": 2, "world": 1}
+-    """
+-    words = text.split(" ")
++    """Count words case-insensitively, ignoring punctuation."""
++    # Convert to lowercase and use regex to find all sequences of word characters
++    words = re.findall(r'\b\w+\b', text.lower())
+     return dict(Counter(words))
+ 
+-
+ def average_word_length(text: str) -> float:
+     """Average length of the words in text; 0.0 for empty text."""
+     words = text.split()
++    if not words:
++        return 0.0
+     return sum(len(w) for w in words) / len(words)
+ 
+-
+ def top_words(text: str, n: int = 3) -> list:
+     """The n most common words as (word, count), ties broken alphabetically."""
+     counts = word_count(text)
+-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
++    # Sort by count (descending) then by word (ascending)
++    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
+\ No newline at end of file
