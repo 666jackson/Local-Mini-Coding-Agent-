@@ -259,3 +259,61 @@ def test_audit_records_each_call(ws: Workspace, tmp_path: Path) -> None:
     assert lines[1]["decision"] == "deny"
     assert lines[2]["args"]["content"].startswith("<500 chars>")
     assert all("ms" in e and "ts" in e for e in lines)
+
+
+# ---------------------------------------------------------------- 修改內容（給 CLI 顯示 diff）
+
+
+def test_changes_compares_against_original_content(ws: Workspace):
+    """改兩次同一個檔案，diff 要對照「第一次改之前」的內容，不是上一次。"""
+    tb = Toolbox(ws)
+    (ws.root / "m.py").write_text("x = 1\n")
+    call(tb, "write_file", path="m.py", content="x = 2\n")
+    call(tb, "write_file", path="m.py", content="x = 3\n")
+    (rel, diff), = tb.changes()
+    assert rel == "m.py"
+    assert "-x = 1" in diff and "+x = 3" in diff and "x = 2" not in diff
+
+
+def test_changes_skips_files_reverted_to_original(ws: Workspace):
+    tb = Toolbox(ws)
+    (ws.root / "m.py").write_text("x = 1\n")
+    call(tb, "write_file", path="m.py", content="x = 2\n")
+    call(tb, "write_file", path="m.py", content="x = 1\n")
+    assert tb.changes() == []
+
+
+def test_changes_marks_new_files(ws: Workspace):
+    tb = Toolbox(ws)
+    call(tb, "write_file", path="new.py", content="y = 1\n")
+    (rel, diff), = tb.changes()
+    assert rel == "new.py" and diff.startswith("--- /dev/null") and "+y = 1" in diff
+
+
+def test_demo_script_is_protected_by_default(ws: Workspace):
+    """agent 不能改 demo.py，否則「修改前後對照」可以造假。"""
+    tb = Toolbox(ws, protected_globs=DEFAULT_PROTECTED)
+    out = call(tb, "write_file", path="demo.py", content="print('all good')\n")
+    assert out.startswith("ERROR") and "受保護" in out
+    assert not (ws.root / "demo.py").exists()
+
+
+def test_running_protected_demo_script_is_allowed(ws: Workspace):
+    """demo.py 受保護時，`python demo.py` 直接允許，不必問使用者。"""
+    (ws.root / "demo.py").write_text("print('demo ok')\n")
+    asked: list[str] = []
+    policy = CommandPolicy(ws, confirm_fn=lambda c: asked.append(c) or False)
+    tb = Toolbox(ws, policy, protected_globs=DEFAULT_PROTECTED)
+    r = tb.dispatch("run_command", json.dumps({"command": "python demo.py"}))
+    assert r.decision == "allow" and "demo ok" in r.content and asked == []
+
+
+def test_demo_script_not_auto_allowed_when_editable(ws: Workspace):
+    """--allow-test-edits 關掉保護後，agent 可以改 demo.py，就不能再自動執行它。"""
+    (ws.root / "demo.py").write_text("print('demo ok')\n")
+    tb = Toolbox(ws, CommandPolicy(ws, confirm_fn=lambda c: False), protected_globs=())
+    r = tb.dispatch("run_command", json.dumps({"command": "python demo.py"}))
+    assert r.decision == "confirm" and r.content.startswith("ERROR")
+    r = Toolbox(ws, CommandPolicy(ws, confirm_fn=lambda c: False), protected_globs=DEFAULT_PROTECTED).dispatch(
+        "run_command", json.dumps({"command": "python demo.py; rm -rf /"}))
+    assert r.decision == "deny"

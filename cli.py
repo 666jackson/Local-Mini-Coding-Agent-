@@ -20,18 +20,22 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.table import Table
 
 from agent.audit import AuditLog
 from agent.config import Config
 from agent.llm import OpenAICompatLLM
 from agent.loop import RunResult, run
 from agent.safety import CommandPolicy, Workspace
-from agent.tools import DEFAULT_PROTECTED, DockerRunner, LocalRunner, Toolbox
+from agent.tools import DEFAULT_PROTECTED, CommandRunner, DockerRunner, LocalRunner, Toolbox
 
 ROOT = Path(__file__).resolve().parent
 console = Console(highlight=False)
 
 DECISION_STYLE = {"allow": "green", "confirm": "yellow", "deny": "bold red"}
+DEMO_SCRIPT = "demo.py"  # 工作區裡有這個檔案，就在修改前後各跑一次，對照結果
+MAX_DIFF_LINES = 40  # 畫面上每個檔案最多顯示幾行 diff；完整內容存在 runs/ 底下
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -114,10 +118,101 @@ def make_printer(quiet: bool):
             console.print(f"  {tag}[{style}]{escape(first[:200])}[/]")
         elif kind == "nudge":
             console.print(f"[yellow]✋ harness 提醒：{escape(d['text'])}[/]")
-        elif kind == "end":
-            show_summary(d["result"])
 
     return on_event
+
+
+def run_demo(ws: Workspace, runner: CommandRunner, timeout: int) -> str | None:
+    """工作區有 demo.py 就執行它並回傳輸出（含錯誤訊息）；沒有就回傳 None。"""
+    if not (ws.root / DEMO_SCRIPT).is_file():
+        return None
+    out = runner.run(["python", DEMO_SCRIPT], ws, timeout)
+    text = out.stdout.rstrip()
+    if out.exit_code != 0:
+        err = [ln for ln in out.stderr.strip().splitlines() if ln.strip()]
+        text += f"\n（demo.py 結束碼 {out.exit_code}：{err[-1] if err else '沒有錯誤訊息'}）"
+    return text.strip()
+
+
+def show_changes(changes: list[tuple[str, str]], save_to: Path | None = None) -> None:
+    """用紅綠色 diff 顯示 agent 改了哪些檔案；完整 diff 另存一份。"""
+    if not changes:
+        console.print(Panel("[dim]這次執行沒有修改任何檔案。[/]", title="修改內容", border_style="magenta"))
+        return
+    if save_to is not None:
+        save_to.parent.mkdir(parents=True, exist_ok=True)
+        save_to.write_text("\n\n".join(d for _, d in changes) + "\n", encoding="utf-8")
+    for rel, diff in changes:
+        lines = diff.splitlines()
+        added = sum(1 for ln in lines if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in lines if ln.startswith("-") and not ln.startswith("---"))
+        shown = lines[2:]  # 省略 ---/+++ 標頭，檔名已經在標題上
+        note = ""
+        if len(shown) > MAX_DIFF_LINES:
+            note = f"\n[dim]…還有 {len(shown) - MAX_DIFF_LINES} 行，完整內容：{escape(show_path(save_to)) if save_to else ''}[/]"
+            shown = shown[:MAX_DIFF_LINES]
+        body = Syntax("\n".join(shown), "diff", theme="ansi_dark", background_color="default", word_wrap=True)
+        console.print(Panel(body, title=f"修改內容：{escape(rel)}（+{added} / -{removed}）", border_style="magenta",
+                            subtitle=note.strip() or None))
+
+
+def _demo_ok(result: str, expected: str) -> bool:
+    """結果符合正確答案嗎？例外只比對類別名稱（`CalcError` 符合 `CalcError: 任何訊息`）。"""
+    return result == expected or result.startswith(expected + ":")
+
+
+def show_demo(before: str, after: str) -> None:
+    """並排顯示 demo.py 在修改前、修改後的輸出。
+
+    demo.py 每行印 `例子 => 結果 => 正確答案`，表格就會用 ✓ / ✗ 標出對錯；
+    只印 `例子 => 結果` 時只標出有沒有改變；其他格式就把兩次輸出原樣並排。
+    """
+    rows_b = [ln.split(" => ") for ln in before.splitlines()]
+    rows_a = [ln.split(" => ") for ln in after.splitlines()]
+    n = len(rows_b[0]) if rows_b else 0
+    structured = (
+        n in (2, 3)
+        and len(rows_b) == len(rows_a)
+        and all(len(r) == n for r in rows_b + rows_a)
+        and all(b[0] == a[0] for b, a in zip(rows_b, rows_a))
+    )
+    table = Table(title="修改前後對照（執行 demo.py）", title_style="bold", border_style="cyan", expand=True)
+    if not structured:
+        table.add_column("修改前")
+        table.add_column("修改後")
+        table.add_row(escape(before), escape(after))
+        console.print(table)
+        return
+
+    table.add_column("例子", style="bold", ratio=4)
+    table.add_column("修改前", ratio=3)
+    table.add_column("修改後", ratio=3)
+    if n == 3:
+        table.add_column("正確答案", ratio=2)
+    fixed = broken = wrong = 0
+    for b, a in zip(rows_b, rows_a):
+        if n == 3:
+            expected = b[2]
+            ok_b, ok_a = _demo_ok(b[1], expected), _demo_ok(a[1], expected)
+            fixed += (not ok_b) and ok_a
+            broken += ok_b and not ok_a
+            wrong += not ok_a
+            cell_b = f"[{'dim' if ok_b else 'red'}]{'✓' if ok_b else '✗'} {escape(b[1])}[/]"
+            cell_a = f"[{'green' if ok_a else 'bold red'}]{'✓' if ok_a else '✗'} {escape(a[1])}[/]"
+            table.add_row(escape(b[0]), cell_b, cell_a, escape(expected))
+        else:
+            changed = a[1] != b[1]
+            table.add_row(escape(b[0]), f"[{'yellow' if changed else 'dim'}]{escape(b[1])}[/]",
+                          f"[{'yellow' if changed else 'dim'}]{escape(a[1])}{'' if changed else '（沒變）'}[/]")
+    console.print(table)
+    if n == 3:
+        if wrong == 0:
+            console.print(f"[green]demo 的 {len(rows_a)} 個例子全部正確（修好 {fixed} 個）。[/]")
+        else:
+            msg = f"[bold red]注意：demo 還有 {wrong} 個例子不正確"
+            if broken:
+                msg += f"，其中 {broken} 個是原本正確、被這次修改改壞的"
+            console.print(msg + "。測試通過不代表程式一定是對的。[/]")
 
 
 def show_summary(res: RunResult) -> None:
@@ -160,10 +255,15 @@ def main(argv: list[str] | None = None) -> int:
         f"執行器：{'docker（--network none）' if args.docker else 'local'}  --yes：{args.yes}",
         title="mini-agent", border_style="blue",
     ))
+    demo_before = run_demo(ws, runner, args.timeout)  # 在 agent 動手之前先記下原本的行為
     res = run(args.task, llm, toolbox, max_steps=args.max_steps, on_event=make_printer(args.quiet), audit=audit,
               require_passing_tests=not args.no_require_tests)
     if res.answer and args.quiet:
         console.print(escape(res.answer))
+    show_changes(toolbox.changes(), save_to=run_dir / "changes.diff")
+    if demo_before is not None and toolbox.originals:
+        show_demo(demo_before, run_demo(ws, runner, args.timeout) or "")
+    show_summary(res)
     console.print(f"[dim]稽核紀錄：{escape(show_path(audit.path))}[/]")
     return 0 if res.status == "done" and res.verified else 1
 

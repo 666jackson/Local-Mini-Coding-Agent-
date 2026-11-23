@@ -9,6 +9,7 @@ import json
 import re
 
 import pyte
+from fontTools.ttLib import TTCollection, TTFont
 from PIL import Image, ImageDraw, ImageFont
 from wcwidth import wcwidth
 
@@ -17,6 +18,9 @@ MONO_B = "/usr/share/fonts/truetype/noto/NotoSansMono-Bold.ttf"
 CJK = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 CJK_B = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 CJK_INDEX = 3  # Noto Sans CJK TC（.ttc 內的第幾個字型）
+# 前兩種字型缺的符號（✓ ✗ ✋ ↺ 等）依序到這些字型找
+FALLBACK = ["/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]
 
 BG = (24, 26, 33)
 FG = (220, 223, 228)
@@ -50,7 +54,9 @@ def main() -> None:
     ap.add_argument("gif")
     ap.add_argument("--max-idle", type=float, default=1.2, help="畫面靜止超過幾秒就壓縮成這麼長")
     ap.add_argument("--font-size", type=int, default=15)
-    ap.add_argument("--hold-end", type=float, default=5.0)
+    ap.add_argument("--hold-end", type=float, default=6.0)
+    ap.add_argument("--chunk-lines", type=int, default=4, help="大量輸出每段幾行")
+    ap.add_argument("--chunk-pause", type=float, default=0.35, help="大量輸出每段停幾秒")
     args = ap.parse_args()
 
     lines = open(args.cast, encoding="utf-8").read().splitlines()
@@ -67,10 +73,41 @@ def main() -> None:
     for e in events:
         e[2] = re.sub(r"\x1b\[([0-9;]*)m", undim, e[2])
 
+    # 一次印出很多行（例如結尾的 diff）時拆成幾段、每段停一下，GIF 裡才看得到捲動過程
+    paced, shift = [], 0.0
+    for t, kind, data in events:
+        lines = data.split("\n")
+        if len(lines) <= args.chunk_lines * 2:
+            paced.append([t + shift, kind, data])
+            continue
+        for k in range(0, len(lines), args.chunk_lines):
+            piece = "\n".join(lines[k:k + args.chunk_lines])
+            if k + args.chunk_lines < len(lines):
+                piece += "\n"
+            paced.append([t + shift, kind, piece])
+            shift += args.chunk_pause
+    events = paced
+
     fs = args.font_size
     mono, mono_b = ImageFont.truetype(MONO, fs), ImageFont.truetype(MONO_B, fs)
     cjk = ImageFont.truetype(CJK, fs, index=CJK_INDEX)
     cjk_b = ImageFont.truetype(CJK_B, fs, index=CJK_INDEX)
+    mono_cmap = TTFont(MONO, lazy=True).getBestCmap()
+    cjk_cmap = TTCollection(CJK).fonts[CJK_INDEX].getBestCmap()
+    fallbacks = [(ImageFont.truetype(f, fs), TTFont(f, lazy=True).getBestCmap()) for f in FALLBACK]
+
+    def pick(data: str, wide: bool, bold: bool):
+        """依字元選字型：等寬英數 → CJK → 符號後備字型。"""
+        cp = ord(data[0])
+        if not wide and cp <= 0x2FFF and cp in mono_cmap:
+            return mono_b if bold else mono
+        if cp in cjk_cmap:
+            return cjk_b if bold else cjk
+        for f, cmap in fallbacks:
+            if cp in cmap:
+                return f
+        return mono
+
     cw = round(mono.getlength("M"))
     ch = round(fs * 1.45)
     pad = 14
@@ -101,10 +138,7 @@ def main() -> None:
                 if bg != BG:
                     d.rectangle([px, py, px + cw * span, py + ch], fill=bg)
                 if data.strip():
-                    if wide or ord(data[0]) > 0x2FFF:
-                        f = cjk_b if c.bold else cjk
-                    else:
-                        f = mono_b if c.bold else mono
+                    f = pick(data, wide, c.bold)
                     d.text((px, py + (ch - fs) // 2 - 1), data, font=f, fill=fg)
                 x += span
         return img

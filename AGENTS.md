@@ -20,6 +20,7 @@ pytest -q                 # 不需要 Ollama；test_loop.py 用 ScriptedLLM
 - `agent/loop.py`：agent 迴圈、fallback 解析、重複偵測、驗證提醒。
 - `agent/context.py`：工具輸出標籤與舊輸出壓縮。
 - `evals/`：評測任務與執行器。`demo_projects/`：故意埋 bug 的專案，**不要修好它們**。
+  每個示範專案的 `demo.py` 印出 `例子 => 結果 => 正確答案`，CLI 在修改前後各跑一次做對照；它和測試檔一樣受保護。
 
 ## 規則
 

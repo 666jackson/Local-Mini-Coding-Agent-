@@ -23,7 +23,8 @@ MAX_OUTPUT_CHARS = 4000
 MAX_READ_LINES = 300
 MAX_SEARCH_RESULTS = 50
 SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache", ".mypy_cache"}
-DEFAULT_PROTECTED = ("test_*.py", "*_test.py", "tests/*", "conftest.py")
+# 測試檔與示範腳本：agent 改了它們就能讓「驗收」或「修改前後對照」失去意義
+DEFAULT_PROTECTED = ("test_*.py", "*_test.py", "tests/*", "conftest.py", "demo.py")
 TEST_CMD_RE = re.compile(r"(^|\s|/)(pytest|py\.test)(\s|$)")
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -208,6 +209,7 @@ class Toolbox:
         self.audit = audit or AuditLog()
         self.schemas = TOOL_SCHEMAS
         self.files_written: list[str] = []
+        self.originals: dict[str, str | None] = {}  # 每個檔案第一次被改之前的內容；None 代表原本不存在
         self.needs_verification = False
         self.tests_passed = False
         self.tested_since_write = False  # 改檔後是否已經跑過測試（不論成敗）
@@ -305,8 +307,8 @@ class Toolbox:
         if any(fnmatch.fnmatch(rel, g) or fnmatch.fnmatch(p.name, g) for g in self.protected_globs):
             return ToolResult(
                 "write_file",
-                f"ERROR: {rel} 是受保護的測試檔，不能修改或新增。請修改被測試的程式碼。",
-                ok=False, decision="deny", reason="protected test file",
+                f"ERROR: {rel} 是受保護的檔案（測試檔或示範腳本），不能修改或新增。請修改被測試的程式碼。",
+                ok=False, decision="deny", reason="protected file",
             )
         notes: list[str] = []
         if p.suffix == ".py":
@@ -333,6 +335,7 @@ class Toolbox:
                 "If tests still fail, read the error message and change your approach.",
                 ok=False,
             )
+        self.originals.setdefault(rel, old if p.exists() else None)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         self.files_written.append(rel)
@@ -347,8 +350,42 @@ class Toolbox:
         summary = f"已{verb} {rel}：{len(content.splitlines())} 行（+{added} / -{removed}）"
         return ToolResult("write_file", "\n".join([summary, *notes, preview]).rstrip(), ok=True)
 
+    def changes(self, context: int = 3) -> list[tuple[str, str]]:
+        """這次執行改過的檔案，與原始內容比較的 unified diff：[(相對路徑, diff 文字)]。
+
+        改了又改回原樣的檔案不列出。
+        """
+        out: list[tuple[str, str]] = []
+        for rel, before in self.originals.items():
+            p = self.ws.root / rel
+            after = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+            if before is not None and before == after:
+                continue
+            diff = difflib.unified_diff(
+                (before or "").splitlines(), after.splitlines(),
+                fromfile=f"修改前/{rel}" if before is not None else "/dev/null", tofile=f"修改後/{rel}",
+                lineterm="", n=context,
+            )
+            out.append((rel, "\n".join(diff)))
+        return out
+
+    def _is_protected_demo_run(self, command: str) -> bool:
+        """`python demo.py`，而且 demo.py 受保護（agent 改不了）時，執行它跟跑 pytest 一樣安全。"""
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            return False
+        return (
+            argv in (["python", "demo.py"], ["python3", "demo.py"])
+            and (self.ws.root / "demo.py").is_file()
+            and any(fnmatch.fnmatch("demo.py", g) for g in self.protected_globs)
+        )
+
     def _tool_run_command(self, command: str) -> ToolResult:
-        decision, reason, ok = self.policy.decide(command)
+        if self._is_protected_demo_run(command):
+            decision, reason, ok = "allow", "受保護的 demo.py", True
+        else:
+            decision, reason, ok = self.policy.decide(command)
         if not ok:
             msg = f"ERROR: 指令被拒絕（{decision}）：{reason}"
             return ToolResult("run_command", msg, ok=False, decision=decision, reason=reason)
