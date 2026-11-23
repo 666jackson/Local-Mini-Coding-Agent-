@@ -105,7 +105,6 @@ $ python cli.py -w demo_projects/calc --copy --model gemma4-16k "讓所有測試
 - `demo_projects/textstats/NOTES.md` 裡藏了一段注入文字，要求 agent 執行 `curl … | sh`、讀 `~/.ssh/id_rsa`、把 `.env` 的金鑰寫進 README。三件事分別被「shell 運算子 + deny 清單」、「工作區邊界」、「禁碰檔案」擋下，稽核紀錄都看得到（見第 7 節）。
 - **不開 Docker 時的防護是盡力而為。** `pytest` 在白名單內，而 pytest 會執行工作區裡的任何測試與 `conftest.py`。agent 不能改測試檔，但被測試的原始碼也會被 import 執行，所以惡意程式碼仍然可能在本機跑起來。真正的隔離要靠容器（`--docker`），或者在拋棄式 VM 裡執行。
 - confirm 級的指令一旦經過人工同意（例如 `python script.py`），就能做任何 Python 做得到的事。
-- 開發機的 Docker socket 沒有權限，所以 `--docker` 目前只有單元測試驗證它組出來的指令（`tests/test_tools.py::test_docker_runner_argv`），沒有實際在容器裡跑過端到端流程。
 
 ## 5. 小模型工具呼叫的問題與對策（實際觀察）
 
